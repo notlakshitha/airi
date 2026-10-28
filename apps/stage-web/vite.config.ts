@@ -232,12 +232,40 @@ export default defineConfig({
             ],
           },
           workbox: {
-            maximumFileSizeToCacheInBytes: 64 * 1024 * 1024,
-            // The WebAssembly files are over 80% of the build (DuckDB alone ships
-            // three variants and a browser loads one). Precaching them downloads
-            // them all at install, so they are cached on first use instead.
-            globIgnores: ['**/*.wasm'],
+            // Before (#2781): Workbox used the plugin default glob (every JS/CSS/HTML
+            // artifact) with a 64 MiB cap and only `**/*.wasm` ignored. Production
+            // measured ~698 precache entries / ~674 JS files on install — including
+            // route-only, provider, and devtools chunks — so the SW eagerly fetched
+            // unused code-split routes despite `importMode: 'async'`.
+            //
+            // After: install precache is the documented app shell only (HTML, CSS,
+            // icons, web fonts). Lazy JS chunks and WebAssembly stay out of the
+            // install list and are CacheFirst-runtime-cached on first use, so a
+            // clean visit only downloads the current route. Offline navigation
+            // fallback (`./`) and the update prompt are unchanged.
+            maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
+            globPatterns: [
+              'index.html',
+              '**/*.{css,ico,png,svg,webp,woff,woff2}',
+            ],
+            globIgnores: [
+              '**/*.wasm',
+              '**/*.map',
+            ],
             runtimeCaching: [
+              {
+                // Route / provider / feature / shared chunks: hashed file names, so
+                // CacheFirst is safe. Unused splits stay off the network until opened.
+                urlPattern: ({ request, sameOrigin, url }) =>
+                  sameOrigin
+                  && (request.destination === 'script'
+                    || (url.pathname.includes('/assets/') && url.pathname.endsWith('.js'))),
+                handler: 'CacheFirst',
+                options: {
+                  cacheName: 'js-chunks',
+                  expiration: { maxEntries: 200 },
+                },
+              },
               {
                 urlPattern: ({ url }) => url.pathname.endsWith('.wasm'),
                 // The file names carry a content hash, so a cached file never goes stale.
