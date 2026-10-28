@@ -198,10 +198,16 @@ export const useModsServerChannelStore = defineStore('mods:channels:proj-airi:se
 
           const isReconnect = hasEverConnected.value
 
+          // better-ws only accepts sends in state `ready`. Authentication lands while the
+          // transport is still `preparing`, so connected/flush/initialize wait for onReady
+          // on both first connect and reconnect (see #2305 / #2837).
           hasEverConnected.value = true
           connected.value = true
           flush()
           initializeListeners()
+
+          // initialize()/ensureConnected() resolve here so callers can rely on a writable transport.
+          resolve()
 
           if (isReconnect) {
             for (const callback of reconnectedCallbacks) {
@@ -225,15 +231,7 @@ export const useModsServerChannelStore = defineStore('mods:channels:proj-airi:se
           return
 
         if (event.data.authenticated) {
-          if (!hasEverConnected.value) {
-            // First connection can flush immediately after authentication.
-            connected.value = true
-            flush()
-            initializeListeners()
-          }
-          // On reconnect, wait for onReady (after announce) before flushing business events.
-          resolve()
-
+          // Authentication is one handshake step; the transport is only writable after onReady.
           return
         }
 
@@ -305,7 +303,9 @@ export const useModsServerChannelStore = defineStore('mods:channels:proj-airi:se
       void initialize()
 
     if (client.value && connected.value) {
-      client.value.send(data as WebSocketEvent)
+      // Client.send() returns false while the transport is not ready; requeue instead of dropping.
+      if (!client.value.send(data as WebSocketEvent))
+        pendingSend.value.push(data as WebSocketEvent)
     }
     else {
       pendingSend.value.push(data as WebSocketEvent)
@@ -313,13 +313,16 @@ export const useModsServerChannelStore = defineStore('mods:channels:proj-airi:se
   }
 
   function flush() {
-    if (client.value && connected.value) {
-      for (const update of pendingSend.value) {
-        client.value.send(update)
-      }
+    if (!client.value || !connected.value)
+      return
 
-      pendingSend.value = []
+    const remaining: WebSocketEvent[] = []
+    for (const update of pendingSend.value) {
+      if (!client.value.send(update))
+        remaining.push(update)
     }
+
+    pendingSend.value = remaining
   }
 
   function onContextUpdate(callback: (event: WebSocketBaseEvent<'context:update', ContextUpdate>) => void | Promise<void>) {

@@ -622,8 +622,9 @@ export const useContextBridgeStore = defineStore('mods:api:context-bridge', () =
         }
       }
 
+      // ensureConnected resolves on transport ready (not merely authenticated), so the
+      // first registration reaches the server. onReconnected covers later ready cycles.
       await serverChannelStore.ensureConnected()
-
       registerConsumers()
       disposeHookFns.value.push(serverChannelStore.onReconnected(() => registerConsumers()))
 

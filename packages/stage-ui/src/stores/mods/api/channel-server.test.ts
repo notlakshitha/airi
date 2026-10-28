@@ -44,7 +44,12 @@ const serverSdkMocks = vi.hoisted(() => {
       this.listeners.delete(type)
     }
 
+    sendShouldSucceed = true
+
     send(event: any) {
+      if (!this.sendShouldSucceed)
+        return false
+
       this.sent.push(event)
       return true
     }
@@ -142,6 +147,10 @@ describe('channel-server store reconnect', () => {
     const client = serverSdkMocks.MockClient.instances.at(-1)!
 
     client.simulateAuthenticated()
+    expect(store.connected).toBe(false)
+    expect(store.pendingSendCount).toBe(1)
+
+    client.simulateReconnectReady()
     await initializePromise
 
     expect(store.connected).toBe(true)
@@ -183,6 +192,7 @@ describe('channel-server store reconnect', () => {
     const client = serverSdkMocks.MockClient.instances[0]
 
     client.simulateAuthenticated()
+    client.simulateReconnectReady()
     await initializePromise
 
     expect(client.options.heartbeat).toEqual({
@@ -200,10 +210,10 @@ describe('channel-server store reconnect', () => {
     const client = serverSdkMocks.MockClient.instances[0]
 
     client.simulateAuthenticated()
+    client.simulateReconnectReady()
     await initializePromise
 
     client.simulateTransientDisconnect()
-    client.simulateReconnectReady()
     client.simulateReconnectReady()
 
     expect(onReconnected).toHaveBeenCalledTimes(1)
@@ -241,10 +251,10 @@ describe('channel-server store reconnect', () => {
     const client = serverSdkMocks.MockClient.instances[0]
 
     client.simulateAuthenticated()
+    client.simulateReconnectReady()
     await initializePromise
 
     client.simulateTransientDisconnect()
-    client.simulateReconnectReady()
     client.simulateReconnectReady()
 
     expect(successfulCallback).toHaveBeenCalledTimes(1)
@@ -268,6 +278,7 @@ describe('channel-server store reconnect', () => {
     expect(secondClient).toBeDefined()
 
     secondClient.simulateAuthenticated()
+    secondClient.simulateReconnectReady()
     await secondInitializePromise
 
     expect(store.connected).toBe(true)
@@ -295,6 +306,7 @@ describe('channel-server store reconnect', () => {
     expect(authenticatedClient.options.token).toBe('secret')
 
     authenticatedClient.simulateAuthenticated()
+    authenticatedClient.simulateReconnectReady()
     await authenticatedInitialize
 
     expect(store.connected).toBe(true)
@@ -307,6 +319,7 @@ describe('channel-server store reconnect', () => {
     const firstClient = serverSdkMocks.MockClient.instances[0]
 
     firstClient.simulateAuthenticated()
+    firstClient.simulateReconnectReady()
     await firstInitializePromise
 
     firstClient.simulateStateChange('reconnecting', 'failed')
@@ -318,6 +331,7 @@ describe('channel-server store reconnect', () => {
     expect(secondClient).toBeDefined()
 
     secondClient.simulateAuthenticated()
+    secondClient.simulateReconnectReady()
     await secondInitializePromise
 
     expect(store.connected).toBe(true)
@@ -348,8 +362,8 @@ describe('channel-server store reconnect', () => {
     const client = serverSdkMocks.MockClient.instances[0]
 
     client.simulateAuthenticated()
-    await initializePromise
     client.simulateReconnectReady()
+    await initializePromise
 
     client.simulateTransientDisconnect()
 
@@ -377,6 +391,59 @@ describe('channel-server store reconnect', () => {
     ]))
   })
 
+  // Regression coverage for https://github.com/moeru-ai/airi/issues/2305
+  // and the Discord cold-start symptom https://github.com/moeru-ai/airi/issues/2837
+  it('issue #2305: waits for ready before connected/flush and requeues sends that return false', async () => {
+    const store = useModsServerChannelStore()
+
+    const initializePromise = store.initialize({ token: 'secret' })
+    const client = serverSdkMocks.MockClient.instances[0]
+
+    store.send({
+      type: 'module:consumer:register',
+      data: { event: 'input:text', mode: 'consumer-group', group: 'chat-ingestion' },
+    } as any)
+
+    client.simulateAuthenticated()
+
+    expect(store.connected).toBe(false)
+    expect(store.pendingSendCount).toBe(1)
+    expect(client.sent).toHaveLength(0)
+
+    client.simulateReconnectReady()
+    await initializePromise
+
+    expect(store.connected).toBe(true)
+    expect(store.pendingSendCount).toBe(0)
+    expect(client.sent).toEqual([
+      expect.objectContaining({
+        type: 'module:consumer:register',
+        data: { event: 'input:text', mode: 'consumer-group', group: 'chat-ingestion' },
+      }),
+    ])
+
+    client.sendShouldSucceed = false
+    store.send({
+      type: 'module:consumer:register',
+      data: { event: 'input:voice', mode: 'consumer-group', group: 'chat-ingestion' },
+    } as any)
+
+    expect(store.pendingSendCount).toBe(1)
+    expect(client.sent).toHaveLength(1)
+
+    client.sendShouldSucceed = true
+    client.simulateTransientDisconnect()
+    client.simulateReconnectReady()
+
+    expect(store.pendingSendCount).toBe(0)
+    expect(client.sent).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'module:consumer:register',
+        data: { event: 'input:voice', mode: 'consumer-group', group: 'chat-ingestion' },
+      }),
+    ]))
+  })
+
   it('does not reconnect while the url scheme is not valid', async () => {
     const store = useModsServerChannelStore()
 
@@ -384,6 +451,7 @@ describe('channel-server store reconnect', () => {
     const firstClient = serverSdkMocks.MockClient.instances[0]
 
     firstClient.simulateAuthenticated()
+    firstClient.simulateReconnectReady()
     await initializePromise
 
     store.websocketUrl = 'wss:'
@@ -407,6 +475,7 @@ describe('channel-server store reconnect', () => {
     expect(client.options.token).toBe('persisted-secret')
 
     client.simulateAuthenticated()
+    client.simulateReconnectReady()
     await initializePromise
   })
 
@@ -418,6 +487,7 @@ describe('channel-server store reconnect', () => {
     const firstClient = serverSdkMocks.MockClient.instances[0]
 
     firstClient.simulateAuthenticated()
+    firstClient.simulateReconnectReady()
     await initializePromise
 
     store.websocketAuthToken = 'rotated-secret'
