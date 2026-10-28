@@ -9,6 +9,8 @@ const { t } = useI18n()
 const discordStore = useDiscordStore()
 const { enabled, token, configured } = storeToRefs(discordStore)
 
+discordStore.initialize()
+
 function saveSettings() {
   discordStore.saveSettings()
 }

@@ -55,6 +55,7 @@ export function useModulesList() {
   const beatSyncSupported = isBeatSyncSupported()
 
   minecraftStore.initialize()
+  discordStore.initialize()
 
   const modulesList = computed<Module[]>(() => [
     {
